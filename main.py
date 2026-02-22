@@ -4,6 +4,9 @@ import json
 import re
 import base64
 from io import BytesIO
+from datetime import datetime
+import pytz  # ← добавлен здесь!
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram import F
@@ -43,7 +46,7 @@ except Exception as e:
     logging.error(f"groups.json ошибка: {e}")
     GROUP_SCHEDULES = {}
 
-# Загрузка преподавателей (точно так же, как groups)
+# Загрузка преподавателей
 try:
     with open('teachers.json', 'r', encoding='utf-8') as f:
         TEACHERS = json.load(f)
@@ -145,8 +148,6 @@ async def handle_text(message: types.Message):
     # Прямой ответ на вопросы о дате/времени
     date_keywords = ["сегодня", "дата", "год", "число", "день недели", "время", "мск", "москва", "сколько времени", "какое время"]
     if any(kw in lower_text for kw in date_keywords):
-        from datetime import datetime
-        import pytz
         moscow = pytz.timezone('Europe/Moscow')
         now = datetime.now(moscow)
         weekday_ru = {
@@ -164,23 +165,19 @@ async def handle_text(message: types.Message):
         "расписание", "распис", "расп", "распиши", "уроки", "занятия", "пары", "пар",
         "расписание группы", "какое расписание", "покажи расписание", "когда занятия"
     ]
-
     if any(kw in lower_text for kw in schedule_keywords) and GROUP_SCHEDULES:
         group_pattern = r'(\d{2}-?[А-ЯA-ZЁё]{2,5}(?:\d?)(?:-\d)?(?:\s*ЗФО)?(?:-\d{1,2})?)'
         matches = re.findall(group_pattern, user_text, re.IGNORECASE)
-
         query = ""
         if matches:
             query = matches[0].upper().replace(" ", "").replace("-", "")
         else:
             query = re.sub(r'[^А-ЯA-Z0-9-ЗФО]', '', user_text.upper())
-
         found = []
         for code, url in GROUP_SCHEDULES.items():
             clean_code = code.upper().replace(" ", "").replace("-", "")
             if query and (query in clean_code or clean_code in query):
                 found.append((code, url))
-
         if found:
             if len(found) == 1:
                 code, url = found[0]
@@ -193,7 +190,6 @@ async def handle_text(message: types.Message):
                     text += f"...ещё {len(found)-8}. Уточни."
                 await message.answer(text)
             return
-
         else:
             await message.answer("Группу не нашёл 😔\nПример: 'расписание 24-ИСП1-9'")
             return
@@ -202,12 +198,10 @@ async def handle_text(message: types.Message):
     if TEACHERS:
         found = []
         query_clean = lower_text.replace(".", "").replace(" ", "").replace("*", "")
-
         for name, url in TEACHERS.items():
             name_clean = name.lower().replace(".", "").replace(" ", "").replace("*", "")
             if query_clean in name_clean:
                 found.append((name, url))
-
         if found:
             if len(found) == 1:
                 name, url = found[0]
