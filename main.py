@@ -17,11 +17,10 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = "8152924251:AAFJmHGJXGWgQnCcs_O64NTR8YTrK42x0GE"
 MISTRAL_KEY = "rGmIVqCbaDh29Y7t3Yd7ipsbL0ZlQbny"
 
-# ⚠️ ВАЖНО: Убедитесь, что здесь НЕТ параметра 'proxies'!
+# ВАЖНО: Здесь НЕТ параметра proxies!
 client = AsyncOpenAI(
     api_key=MISTRAL_KEY,
     base_url="https://api.mistral.ai/v1",
-    # Никаких proxies здесь!
 )
 
 bot = Bot(token=BOT_TOKEN)
