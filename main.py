@@ -4,21 +4,24 @@ import json
 import re
 import base64
 from io import BytesIO
+from datetime import datetime
+import pytz
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram import F  # ← добавлен импорт для magic filters
+from aiogram import F
 from openai import AsyncOpenAI
 
-# Логи
 logging.basicConfig(level=logging.INFO)
 
-# Настройки
 BOT_TOKEN = "8152924251:AAFJmHGJXGWgQnCcs_O64NTR8YTrK42x0GE"
 MISTRAL_KEY = "rGmIVqCbaDh29Y7t3Yd7ipsbL0ZlQbny"
 
+# ⚠️ ВАЖНО: Убедитесь, что здесь НЕТ параметра 'proxies'!
 client = AsyncOpenAI(
     api_key=MISTRAL_KEY,
     base_url="https://api.mistral.ai/v1",
+    # Никаких proxies здесь!
 )
 
 bot = Bot(token=BOT_TOKEN)
@@ -45,6 +48,15 @@ except Exception as e:
     logging.error(f"groups.json ошибка: {e}")
     GROUP_SCHEDULES = {}
 
+# Загрузка преподавателей
+try:
+    with open('teachers.json', 'r', encoding='utf-8') as f:
+        TEACHERS = json.load(f)
+    logging.info(f"Загружено {len(TEACHERS)} преподавателей")
+except Exception as e:
+    logging.error(f"teachers.json ошибка: {e}")
+    TEACHERS = {}
+
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -53,12 +65,14 @@ async def start_cmd(message: types.Message):
         "🤖 Привет! Я ассистент КИПО.\n\n"
         "Могу:\n"
         "• отвечать на вопросы об институте\n"
-        "• показывать расписание (пиши 'расписание 24-ИСП1-9')\n"
-        "• анализировать фото — кинь картинку (с подписью или без)!\n\n"
+        "• показывать расписание группы (пиши 'расписание 24-ИСП1-9')\n"
+        "• искать преподавателя по фамилии (пиши просто 'Иванова' или 'Абрамова')\n"
+        "• анализировать фото — кинь картинку!\n\n"
         "Примеры:\n"
         "расписание ИСП 25\n"
-        "как поступить\n"
-        "что на фото? (кинь фото)\n"
+        "Абрамова\n"
+        "Ашинова\n"
+        "что на фото?\n"
         "/clear — очистить чат",
         parse_mode="Markdown"
     )
@@ -69,13 +83,12 @@ async def clear_cmd(message: types.Message):
     user_history[user_id] = []
     await message.answer("🧹 Чат очищен!")
 
-# Обработка фото — используем F.photo вместо content_types
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     user_id = message.from_user.id
     history = user_history.get(user_id, [])
 
-    photo = message.photo[-1]  # самое большое разрешение
+    photo = message.photo[-1]
     file_info = await bot.get_file(photo.file_id)
     downloaded_file = await bot.download_file(file_info.file_path)
 
@@ -125,8 +138,7 @@ async def handle_photo(message: types.Message):
         else:
             await message.answer("😔 Проблема с анализом фото. Попробуй другую картинку.")
 
-# Обработка текста
-@dp.message(F.text)  # ← можно добавить, чтобы текст обрабатывался только если нет фото/других типов
+@dp.message(F.text)
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text.strip()
@@ -135,28 +147,39 @@ async def handle_text(message: types.Message):
     history = user_history.get(user_id, [])
     history.append({"role": "user", "content": user_text})
 
-    # Триггеры расписания
+    # Прямой ответ на вопросы о дате/времени
+    date_keywords = ["сегодня", "дата", "год", "число", "день недели", "время", "мск", "москва", "сколько времени", "какое время"]
+    if any(kw in lower_text for kw in date_keywords):
+        moscow = pytz.timezone('Europe/Moscow')
+        now = datetime.now(moscow)
+        weekday_ru = {
+            'Monday': 'понедельник', 'Tuesday': 'вторник', 'Wednesday': 'среда',
+            'Thursday': 'четверг', 'Friday': 'пятница', 'Saturday': 'суббота', 'Sunday': 'воскресенье'
+        }
+        date_str = now.strftime("%d %B %Y года")
+        time_str = now.strftime("%H:%M")
+        day_ru = weekday_ru[now.strftime("%A")]
+        await message.answer(f"Сегодня {day_ru}, {date_str}.\nВремя в Москве: {time_str}")
+        return
+
+    # 1. Расписание группы
     schedule_keywords = [
         "расписание", "распис", "расп", "распиши", "уроки", "занятия", "пары", "пар",
         "расписание группы", "какое расписание", "покажи расписание", "когда занятия"
     ]
-
     if any(kw in lower_text for kw in schedule_keywords) and GROUP_SCHEDULES:
         group_pattern = r'(\d{2}-?[А-ЯA-ZЁё]{2,5}(?:\d?)(?:-\d)?(?:\s*ЗФО)?(?:-\d{1,2})?)'
         matches = re.findall(group_pattern, user_text, re.IGNORECASE)
-
         query = ""
         if matches:
             query = matches[0].upper().replace(" ", "").replace("-", "")
         else:
             query = re.sub(r'[^А-ЯA-Z0-9-ЗФО]', '', user_text.upper())
-
         found = []
         for code, url in GROUP_SCHEDULES.items():
             clean_code = code.upper().replace(" ", "").replace("-", "")
             if query and (query in clean_code or clean_code in query):
                 found.append((code, url))
-
         if found:
             if len(found) == 1:
                 code, url = found[0]
@@ -173,11 +196,34 @@ async def handle_text(message: types.Message):
             await message.answer("Группу не нашёл 😔\nПример: 'расписание 24-ИСП1-9'")
             return
 
-    # Обычный текст → mistral-small-latest
+    # 2. Поиск преподавателя по фамилии
+    if TEACHERS:
+        found = []
+        query_clean = lower_text.replace(".", "").replace(" ", "").replace("*", "")
+        for name, url in TEACHERS.items():
+            name_clean = name.lower().replace(".", "").replace(" ", "").replace("*", "")
+            if query_clean in name_clean:
+                found.append((name, url))
+        if found:
+            if len(found) == 1:
+                name, url = found[0]
+                await message.answer(f"Преподаватель: {name}\nРасписание: {url}")
+            else:
+                text = f"Нашёл {len(found)} похожих преподавателей:\n\n"
+                for i, (name, url) in enumerate(found[:12], 1):
+                    text += f"{i}. {name} → {url}\n"
+                if len(found) > 12:
+                    text += f"\n...ещё {len(found)-12}. Уточни фамилию."
+                text += "\n\nНапиши номер или фамилию точнее:"
+                await message.answer(text)
+            return
+
+    # 3. Всё остальное — Mistral
     system_prompt = (
         "Ты дружелюбный ассистент КИПО. Отвечай на русском, кратко и по делу.\n"
         f"Инфо:\n{INSTITUTE_INFO}\n"
-        "Про расписание — советуй 'расписание [код]'."
+        "Про расписание группы — советуй 'расписание [код]'\n"
+        "Про преподавателя — советуй написать просто фамилию"
     )
 
     messages = [{"role": "system", "content": system_prompt}] + history[-12:]
